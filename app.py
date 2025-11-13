@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import os
@@ -16,7 +15,6 @@ def load_inventory():
     if os.path.exists(DATA_FILE):
         try:
             df = pd.read_csv(DATA_FILE)
-            # 컬럼이 비어있거나 형식이 어긋난 경우 대비
             expected_cols = ["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"]
             for col in expected_cols:
                 if col not in df.columns:
@@ -24,7 +22,6 @@ def load_inventory():
             df = df[expected_cols]
             return df
         except Exception:
-            # 파일이 깨져 있을 경우 초기화
             return pd.DataFrame(columns=["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"])
     else:
         return pd.DataFrame(columns=["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"])
@@ -43,7 +40,9 @@ st.title("📦 EVEREST 재고관리 시스템 (실제 저장 버전)")
 
 tab_input, tab_view = st.tabs(["재고 입력/수정", "재고 현황 보기"])
 
-# ---------- 탭 1: 재고 입력/수정 ----------
+# =========================================================
+# 🔹 탭 1: 재고 입력 / 수정
+# =========================================================
 with tab_input:
     st.subheader("재고 등록 / 수정")
 
@@ -92,7 +91,6 @@ with tab_input:
                 )
                 st.success("새 재고 품목이 등록되었습니다.")
 
-            # 세션 + 파일 모두 저장
             st.session_state.inventory = df
             save_inventory(df)
 
@@ -109,44 +107,84 @@ with tab_input:
             st.warning("해당 지점/품목 조합이 존재하지 않습니다.")
 
     st.markdown("---")
-    st.caption("※ 이 버전은 inventory_data.csv 파일에 저장되므로, 앱을 다시 열어도 데이터가 유지됩니다.")
+    st.caption("※ inventory_data.csv 파일에 저장되므로, 앱을 다시 열어도 데이터가 유지됩니다.")
 
-# ---------- 탭 2: 재고 현황 ----------
+
+# =========================================================
+# 🔹 탭 2: 재고 현황 보기 (Top-Down 3단 필터 + 색 강조)
+# =========================================================
 with tab_view:
-    st.subheader("재고 현황 조회")
+    st.subheader("재고 현황 조회 (지점 → 카테고리 → 품목 Top-Down)")
 
     df = st.session_state.inventory.copy()
 
-    # 필터 영역
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        f_branches = st.multiselect("지점 필터", branches, default=branches)
-    with f2:
-        f_category = st.multiselect("카테고리 필터", categories)
-    with f3:
-        only_low = st.checkbox("최소수량 이하인 품목만 보기 (발주 필요)")
-
-    if not df.empty:
-        # 숫자형 변환 (혹시 문자열로 저장된 경우 대비)
+    if df.empty:
+        st.info("등록된 재고 데이터가 없습니다. 먼저 '재고 입력/수정' 탭에서 데이터를 추가하세요.")
+    else:
+        # 숫자형 변환 (안전장치)
         for col in ["현재수량", "최소수량"]:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-        # 필터 적용
-        df = df[df["지점"].isin(f_branches)]
-        if f_category:
-            df = df[df["카테고리"].isin(f_category)]
+        # ------------------------------------
+        # 1단계: 지점 선택 (Top-Down 상위 단계)
+        # ------------------------------------
+        branch_options = ["전체"] + sorted(df["지점"].dropna().unique().tolist())
+        selected_branch = st.selectbox("1단계: 지점 선택", branch_options)
+
+        filtered = df.copy()
+        if selected_branch != "전체":
+            filtered = filtered[filtered["지점"] == selected_branch]
+
+        # ------------------------------------
+        # 2단계: 카테고리 선택
+        # ------------------------------------
+        available_categories = sorted(filtered["카테고리"].dropna().unique().tolist())
+        cat_options = ["전체"] + available_categories
+        selected_category = st.selectbox("2단계: 카테고리 선택", cat_options)
+
+        if selected_category != "전체":
+            filtered = filtered[filtered["카테고리"] == selected_category]
+
+        # ------------------------------------
+        # 3단계: 품목 선택
+        # ------------------------------------
+        available_items = sorted(filtered["품목명"].dropna().unique().tolist())
+        item_options = ["전체"] + available_items
+        selected_item = st.selectbox("3단계: 품목 선택", item_options)
+
+        if selected_item != "전체":
+            filtered = filtered[filtered["품목명"] == selected_item]
+
+        # ------------------------------------
+        # 추가 필터: 최소수량 이하만 보기
+        # ------------------------------------
+        only_low = st.checkbox("최소수량 이하 품목만 보기 (발주 필요)", value=False)
+
         if only_low:
-            df = df[df["현재수량"] <= df["최소수량"]]
+            filtered = filtered[filtered["현재수량"] <= filtered["최소수량"]]
 
-        st.dataframe(df, use_container_width=True)
+        st.markdown("#### 재고 목록")
 
-        # 다운로드 버튼
-        csv = df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            label="⬇ 현재 조회 결과를 CSV로 다운로드",
-            data=csv,
-            file_name="everest_inventory.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("등록된 재고 데이터가 없습니다. 먼저 '재고 입력/수정' 탭에서 데이터를 추가하세요.")
+        if filtered.empty:
+            st.info("선택한 조건에 해당하는 재고가 없습니다.")
+        else:
+            # 부족 재고(현재수량 ≤ 최소수량) 행 색깔 표시
+            def highlight_low(row):
+                if row["현재수량"] <= row["최소수량"]:
+                    return ['background-color: #ffcccc'] * len(row)  # 연한 빨강
+                else:
+                    return [''] * len(row)
+
+            styled = filtered.style.apply(highlight_low, axis=1)
+            st.dataframe(styled, use_container_width=True)
+
+            # 다운로드 버튼 (현재 필터 적용된 결과만)
+            csv = filtered.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="⬇ 현재 조회 결과를 CSV로 다운로드",
+                data=csv,
+                file_name="everest_inventory_filtered.csv",
+                mime="text/csv",
+            )
+
+
