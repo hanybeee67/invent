@@ -1,18 +1,45 @@
+
 import streamlit as st
 import pandas as pd
+import os
 
-st.set_page_config(page_title="Everest 재고관리 시스템", layout="wide")
+st.set_page_config(page_title="Everest 재고관리 시스템 (저장 버전)", layout="wide")
 
-# ---------- 초기 세션 상태 ----------
-if "inventory" not in st.session_state:
-    st.session_state.inventory = pd.DataFrame(
-        columns=["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"]
-    )
+# ---------- 설정 ----------
+DATA_FILE = "inventory_data.csv"  # 재고 데이터 저장 파일 이름
 
 branches = ["동대문", "굿모닝시티", "양재", "수원영통", "동탄", "영등포", "룸비니"]
 categories = ["육류", "야채", "해산물", "향신료", "소스", "곡류/면", "음료", "포장재", "기타"]
 
-st.title("📦 EVEREST 재고관리 시스템 (베타)")
+# ---------- 데이터 로드 함수 ----------
+def load_inventory():
+    if os.path.exists(DATA_FILE):
+        try:
+            df = pd.read_csv(DATA_FILE)
+            # 컬럼이 비어있거나 형식이 어긋난 경우 대비
+            expected_cols = ["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"]
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = ""
+            df = df[expected_cols]
+            return df
+        except Exception:
+            # 파일이 깨져 있을 경우 초기화
+            return pd.DataFrame(columns=["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"])
+    else:
+        return pd.DataFrame(columns=["지점", "품목명", "카테고리", "단위", "현재수량", "최소수량", "비고"])
+
+
+# ---------- 데이터 저장 함수 ----------
+def save_inventory(df: pd.DataFrame):
+    df.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+
+
+# ---------- 세션 상태 초기화 ----------
+if "inventory" not in st.session_state:
+    st.session_state.inventory = load_inventory()
+
+st.title("📦 EVEREST 재고관리 시스템 (실제 저장 버전)")
 
 tab_input, tab_view = st.tabs(["재고 입력/수정", "재고 현황 보기"])
 
@@ -42,7 +69,7 @@ with tab_input:
         if name.strip() == "":
             st.warning("품목명을 입력하세요.")
         else:
-            df = st.session_state.inventory
+            df = st.session_state.inventory.copy()
             mask = (df["지점"] == branch) & (df["품목명"] == name)
 
             new_row = {
@@ -56,27 +83,33 @@ with tab_input:
             }
 
             if mask.any():
-                st.session_state.inventory.loc[mask, :] = list(new_row.values())
+                df.loc[mask, :] = list(new_row.values())
                 st.success("기존 품목 정보가 업데이트되었습니다.")
             else:
-                st.session_state.inventory = pd.concat(
+                df = pd.concat(
                     [df, pd.DataFrame([new_row])],
                     ignore_index=True
                 )
                 st.success("새 재고 품목이 등록되었습니다.")
 
+            # 세션 + 파일 모두 저장
+            st.session_state.inventory = df
+            save_inventory(df)
+
     # 삭제
     if del_btn:
-        df = st.session_state.inventory
+        df = st.session_state.inventory.copy()
         mask = (df["지점"] == branch) & (df["품목명"] == name)
         if mask.any():
-            st.session_state.inventory = df[~mask].reset_index(drop=True)
+            df = df[~mask].reset_index(drop=True)
+            st.session_state.inventory = df
+            save_inventory(df)
             st.success(f"{branch} / {name} 품목이 삭제되었습니다.")
         else:
             st.warning("해당 지점/품목 조합이 존재하지 않습니다.")
 
     st.markdown("---")
-    st.caption("※ 지금 버전은 메모리(session_state)에만 저장됨. 앱을 재시작하면 초기화됨. 나중에 원하면 엑셀/구글시트/DB 연동 버전으로 업그레이드 가능.")
+    st.caption("※ 이 버전은 inventory_data.csv 파일에 저장되므로, 앱을 다시 열어도 데이터가 유지됩니다.")
 
 # ---------- 탭 2: 재고 현황 ----------
 with tab_view:
@@ -94,6 +127,10 @@ with tab_view:
         only_low = st.checkbox("최소수량 이하인 품목만 보기 (발주 필요)")
 
     if not df.empty:
+        # 숫자형 변환 (혹시 문자열로 저장된 경우 대비)
+        for col in ["현재수량", "최소수량"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
         # 필터 적용
         df = df[df["지점"].isin(f_branches)]
         if f_category:
